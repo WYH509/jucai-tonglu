@@ -1,0 +1,13 @@
+services:
+  - name: jucai-tonglu
+    type: web_service
+    ownerId: tea-d7uldndckfvc73bbr05g
+    repo: https://github.com/WYH509/jucai-tonglu
+    branch: main
+    serviceDetails:
+      env: node
+      plan: free
+      envSpecificDetails:
+        buildCommand: npm run build
+        startCommand: npm start
+        nodeVersion: "20"
