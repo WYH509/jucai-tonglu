@@ -1,1 +1,0 @@
-{"serviceDetails":{"envSpecificDetails":{"buildCommand":"cd jucai-tonglu && npm run build","startCommand":"cd jucai-tonglu && npm start"}}}
