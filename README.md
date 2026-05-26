@@ -1,36 +1,68 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 聚财通路
 
-## Getting Started
+个人财务工具，包含两大模块：
 
-First, run the development server:
+## 功能
+
+### 私募基金看板
+- 基于飞书 Bitable 的私募基金数据管理
+- 净值跟踪、收益统计、持仓分析
+
+### 装修记账
+- 装修费用记录与管理
+- 分类统计、预算控制
+
+## 技术栈
+
+- **Next.js** (App Router, TypeScript)
+- **Tailwind CSS** (样式)
+- **@larksuiteoapi/node-sdk** (飞书 API)
+- **Axios** (HTTP 请求)
+
+## 快速开始
 
 ```bash
+# 安装依赖
+npm install
+
+# 开发服务器
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+
+# 构建
+npm run build
+
+# 生产启动
+npm start
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 环境变量
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+复制 `.env.local` 并填入实际的飞书应用 ID 和表格 ID：
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```
+FEISHU_APP_ID=your_app_id
+FEISHU_APP_SECRET=your_app_secret
+FEISHU_TABLE_PRIVATE_FUND_INPUT=your_table_id
+FEISHU_TABLE_PRIVATE_FUND_STATS=your_table_id
+FEISHU_TABLE_RENOVATION_INPUT=your_table_id
+FEISHU_TABLE_RENOVATION_STATS=your_table_id
+```
 
-## Learn More
+## 项目结构
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```
+src/
+├── app/
+│   ├── layout.tsx         # 根布局
+│   ├── page.tsx           # 首页
+│   ├── private-fund/      # 私募基金看板路由
+│   │   └── page.tsx
+│   └── renovation/        # 装修记账路由
+│       └── page.tsx
+├── components/
+│   ├── HomePage.tsx       # 首页组件
+│   ├── private-fund/      # 私募基金组件
+│   └── renovation/        # 装修记账组件
+└── lib/
+    └── feishu.ts          # 飞书 API 工具函数
+```
