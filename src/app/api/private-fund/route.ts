@@ -1,60 +1,43 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import {
-  listPrivateFundRecords,
-  createPrivateFundRecord,
-} from "@/lib/feishu";
+  fundsData,
+  totalInvestment,
+  totalAssets,
+  calcThisMonthProfit,
+  calcYearlyProfit,
+  getThisMonthProfit,
+  getYearlyProfit,
+} from "@/data/privateFundData";
 
 /**
  * GET /api/private-fund
- * 返回私募基金列表
+ * 返回私募基金数据（本地数据源）
  */
 export async function GET() {
   try {
-    const data = await listPrivateFundRecords();
-    return NextResponse.json({ success: true, data: data.data?.items || [] });
+    // 给每只基金附加计算好的收益数据
+    const enriched = fundsData.map((fund) => ({
+      ...fund,
+      本周收益: 0, // 暂无周度数据
+      本月收益: getThisMonthProfit(fund.基金名称),
+      本年收益: getYearlyProfit(fund.基金名称),
+    }));
+
+    const data = {
+      funds: enriched,
+      summary: {
+        totalInvestment,
+        totalAssets,
+        totalMonthlyProfit: calcThisMonthProfit(),
+        totalYearlyProfit: calcYearlyProfit(),
+      },
+    };
+
+    return NextResponse.json({ success: true, data });
   } catch (error: unknown) {
     const message =
       error instanceof Error ? error.message : "获取私募基金数据失败";
     console.error("[PrivateFund API] GET error:", message);
-    return NextResponse.json(
-      { success: false, error: message },
-      { status: 500 }
-    );
-  }
-}
-
-/**
- * POST /api/private-fund
- * 创建新的私募基金记录
- * Body: { 基金名称, 购买日期, 购买金额 }
- */
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { fundName, purchaseDate, purchaseAmount } = body;
-
-    if (!fundName || !purchaseDate || !purchaseAmount) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "缺少必填字段：基金名称、购买日期、购买金额",
-        },
-        { status: 400 }
-      );
-    }
-
-    const fields: Record<string, unknown> = {
-      基金名称: fundName,
-      购买日期: purchaseDate,
-      购买金额: Number(purchaseAmount),
-    };
-
-    const result = await createPrivateFundRecord(fields);
-    return NextResponse.json({ success: true, data: result.data });
-  } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : "创建私募基金记录失败";
-    console.error("[PrivateFund API] POST error:", message);
     return NextResponse.json(
       { success: false, error: message },
       { status: 500 }

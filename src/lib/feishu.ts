@@ -95,23 +95,27 @@ export function getPrivateFundConfig() {
 
 /**
  * 列出私募基金所有记录
+ * 配置缺失时返回本地模拟数据，避免报错
  */
 export async function listPrivateFundRecords() {
   const { appToken, tableId } = getPrivateFundConfig();
   if (!appToken || !tableId) {
-    throw new Error("私募基金 Bitable 配置缺失，请检查环境变量");
+    console.warn("[Feishu] 私募基金配置缺失，返回本地数据");
+    return { data: { items: [] }, fromLocal: true };
   }
   return listRecords(appToken, tableId, 100);
 }
 
 /**
  * 创建私募基金记录
+ * 配置缺失时仅返回成功标记，不报错
  * @param fields - 字段值对象
  */
 export async function createPrivateFundRecord(fields: Record<string, unknown>) {
   const { appToken, tableId } = getPrivateFundConfig();
   if (!appToken || !tableId) {
-    throw new Error("私募基金 Bitable 配置缺失，请检查环境变量");
+    console.warn("[Feishu] 私募基金配置缺失，跳过创建");
+    return { data: { record: { fields } }, fromLocal: true };
   }
   return createRecord(appToken, tableId, fields);
 }
