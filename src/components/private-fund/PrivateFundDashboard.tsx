@@ -1,10 +1,25 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useReactToPrint } from "react-to-print";
+import FundDetailModal from "./FundDetailModal";
+import FundEditModal from "./FundEditModal";
+
+// 延迟加载非首屏 Tab
+const NetValueInput = lazy(() => import("./NetValueInput"));
+const MonthlyStats = lazy(() => import("./MonthlyStats"));
 
 // ---------- Types ----------
+// 注：含 / 的属性名必须加引号
 
-interface FundData {
+export interface FundDisplayRecord {
+  "日期": string;
+  "金额": number;
+  "份额": number;
+  "类型": "分红" | "补回" | "赎回";
+}
+
+export interface FundDisplayData {
   "基金名称": string;
   "基金代码": string;
   "成立/购买日期": string;
@@ -17,34 +32,53 @@ interface FundData {
   "本周收益": number;
   "本月收益": number;
   "本年收益": number;
+  "购买渠道": string;
+  "records": FundDisplayRecord[];
 }
 
-interface SummaryData {
-  totalInvestment: number;
+export interface SummaryDisplayData {
   totalAssets: number;
-  totalMonthlyProfit: number;
-  totalYearlyProfit: number;
+  weeklyProfit: number;
+  weeklyProfitRate: number;
+  monthlyProfit: number;
+  monthlyProfitRate: number;
+  yearlyProfit: number;
+  yearlyProfitRate: number;
+  totalProfit: number;
+  totalProfitRate: number;
+  fullCaliberProfit: number;
+  fullCaliberProfitRate: number;
 }
 
 interface ApiResponse {
   success: boolean;
   data: {
-    funds: FundData[];
-    summary: SummaryData;
+    funds: FundDisplayData[];
+    summary: SummaryDisplayData;
   };
+  fallback?: boolean;
 }
 
-// ---------- Helpers ----------
+// Tab 配置
+type TabKey = "overview" | "list" | "nav-input" | "monthly-stats" | "profit" | "config";
 
-function fmt(n: number): string {
-  return new Intl.NumberFormat("zh-CN", {
-    style: "decimal",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(n);
+interface TabItem {
+  key: TabKey;
+  label: string;
 }
 
-function fmtCurrency(n: number): string {
+const TAB_ITEMS: TabItem[] = [
+  { key: "overview", label: "总览" },
+  { key: "list", label: "基金明细" },
+  { key: "nav-input", label: "净值录入" },
+  { key: "monthly-stats", label: "月度统计" },
+  { key: "profit", label: "收益趋势" },
+  { key: "config", label: "配置" },
+];
+
+// ---------- Format Helpers ----------
+
+function fmtAmount(n: number): string {
   return new Intl.NumberFormat("zh-CN", {
     style: "decimal",
     minimumFractionDigits: 2,
@@ -53,37 +87,62 @@ function fmtCurrency(n: number): string {
 }
 
 function fmtPercent(n: number): string {
-  return (n * 100).toFixed(2) + "%";
-}
-
-function profitColorClass(value: number): string {
-  if (value > 0) return "text-green-600";
-  if (value < 0) return "text-red-500";
-  return "text-gray-500";
+  const pct = (n * 100).toFixed(2) + "%";
+  return n > 0 ? "+" + pct : pct;
 }
 
 function profitText(value: number): string {
-  if (value > 0) return `+¥${fmtCurrency(value)}`;
-  if (value < 0) return `-¥${fmtCurrency(Math.abs(value))}`;
+  if (value > 0) return `+¥${fmtAmount(value)}`;
+  if (value < 0) return `-¥${fmtAmount(Math.abs(value))}`;
   return "¥0.00";
 }
 
-type TabKey = "overview" | "list" | "profit";
+/**
+ * 中国颜色习惯：正数红色，负数绿色
+ */
+function profitColor(value: number): string {
+  if (value > 0) return "text-red-600";
+  if (value < 0) return "text-green-600";
+  return "text-gray-500";
+}
 
-const TAB_ITEMS: { key: TabKey; label: string }[] = [
-  { key: "overview", label: "概览" },
-  { key: "list", label: "基金列表" },
-  { key: "profit", label: "收益趋势" },
-];
+/**
+ * 缩略显示大数字（万/亿）
+ */
+function fmtCompact(n: number): string {
+  if (n >= 100_000_000) {
+    return (n / 100_000_000).toFixed(2) + "亿";
+  }
+  if (n >= 10_000) {
+    return (n / 10_000).toFixed(2) + "万";
+  }
+  return fmtAmount(n);
+}
 
 // ---------- Component ----------
 
 export default function PrivateFundDashboard() {
-  const [funds, setFunds] = useState<FundData[]>([]);
-  const [summary, setSummary] = useState<SummaryData | null>(null);
+  const [activeTab, setActiveTab] = useState<TabKey>("overview");
+  const [funds, setFunds] = useState<FundDisplayData[]>([]);
+  const [summary, setSummary] = useState<SummaryDisplayData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<TabKey>("overview");
+  const [selectedFund, setSelectedFund] = useState<FundDisplayData | null>(null);
+  const [editingFund, setEditingFund] = useState<FundDisplayData | null>(null);
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+
+  const printRef = useRef<HTMLDivElement>(null);
+
+  const handlePrintPdf = useReactToPrint({
+    contentRef: printRef,
+    documentTitle: "私募基金持仓明细",
+    pageStyle: `
+      @page { size: A4 landscape; margin: 12mm; }
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .no-print { display: none !important; }
+    `,
+  });
 
   useEffect(() => {
     fetchData();
@@ -105,11 +164,35 @@ export default function PrivateFundDashboard() {
     }
   };
 
-  // ---------- Computed ----------
+  // ---------- Handlers ----------
 
-  const totalTodayNav = funds.reduce((s, f) => s + f.当前净值, 0);
+  const handleRowClick = (fund: FundDisplayData) => {
+    setSelectedFund(fund);
+    setShowDetailModal(true);
+  };
 
-  // ---------- Loading State ----------
+  const handleEditClick = (fund: FundDisplayData) => {
+    setEditingFund(fund);
+    setShowEditModal(true);
+  };
+
+  const handleDetailClose = () => {
+    setShowDetailModal(false);
+    setSelectedFund(null);
+  };
+
+  const handleEditClose = () => {
+    setShowEditModal(false);
+    setEditingFund(null);
+  };
+
+  const handleEditSave = async (_data: FundDisplayData) => {
+    setShowEditModal(false);
+    setEditingFund(null);
+    await fetchData();
+  };
+
+  // ---------- Loading / Error ----------
 
   if (loading) {
     return (
@@ -144,204 +227,362 @@ export default function PrivateFundDashboard() {
 
   const s = summary!;
 
+  // ---------- Summary Cards ----------
+
+  const summaryCards = [
+    { title: "总持仓市值", value: `¥${fmtAmount(s.totalAssets)}`, badge: "" },
+    {
+      title: "本周收益",
+      value: profitText(s.weeklyProfit),
+      badge: fmtPercent(s.weeklyProfitRate),
+      hasColor: true,
+      profit: s.weeklyProfit,
+    },
+    {
+      title: "本月收益",
+      value: profitText(s.monthlyProfit),
+      badge: fmtPercent(s.monthlyProfitRate),
+      hasColor: true,
+      profit: s.monthlyProfit,
+    },
+    {
+      title: "本年收益",
+      value: profitText(s.yearlyProfit),
+      badge: fmtPercent(s.yearlyProfitRate),
+      hasColor: true,
+      profit: s.yearlyProfit,
+    },
+    {
+      title: "持仓总收益",
+      value: profitText(s.totalProfit),
+      badge: fmtPercent(s.totalProfitRate),
+      hasColor: true,
+      profit: s.totalProfit,
+    },
+    {
+      title: "全口径收益",
+      value: profitText(s.fullCaliberProfit),
+      badge: fmtPercent(s.fullCaliberProfitRate),
+      hasColor: true,
+      profit: s.fullCaliberProfit,
+    },
+  ];
+
+  // ==================== Tab Loading Fallback ====================
+
+  const tabFallback = (
+    <div className="flex items-center justify-center py-20">
+      <div className="text-sm text-gray-400">加载中...</div>
+    </div>
+  );
+
   // ==================== Render ====================
 
   return (
     <div className="min-h-screen bg-gray-50 pb-8">
-      {/* iOS Tab Bar */}
-      <div className="sticky top-0 z-40 bg-white border-b border-gray-200">
-        <div className="flex justify-around">
+      {/* ──────── Tab 导航栏 ──────── */}
+      <div className="sticky top-0 z-20 bg-gray-50/90 backdrop-blur-sm border-b border-gray-200/80 no-print">
+        <div className="flex overflow-x-auto hide-scrollbar px-2">
           {TAB_ITEMS.map((tab) => (
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
-              className={`relative py-3 text-sm font-medium transition-colors ${
+              className={`px-4 py-3 text-sm font-medium whitespace-nowrap transition-all border-b-2 shrink-0 ${
                 activeTab === tab.key
-                  ? "text-blue-500"
-                  : "text-gray-500 hover:text-gray-700"
+                  ? "text-blue-600 border-blue-500"
+                  : "text-gray-500 border-transparent hover:text-gray-700"
               }`}
             >
               {tab.label}
-              {activeTab === tab.key && (
-                <span className="absolute bottom-0 left-1/4 right-1/4 h-0.5 bg-blue-500 rounded-full" />
-              )}
             </button>
           ))}
         </div>
       </div>
 
-      {/* ──────── 概览 Tab ──────── */}
+      {/* ──────── 总览 Tab ──────── */}
       {activeTab === "overview" && (
-        <div className="px-4 pt-4 space-y-4">
-          {/* 4 个汇总卡片 */}
-          <div className="grid grid-cols-2 gap-3">
-            <SummaryCard
-              title="总资产"
-              value={`¥${fmtCurrency(s.totalAssets)}`}
-              badge="当前市值"
-            />
-            <SummaryCard
-              title="总投入"
-              value={`¥${fmtCurrency(s.totalInvestment)}`}
-              badge="累计投入"
-            />
-            <SummaryCard
-              title="本月收益"
-              value={profitText(s.totalMonthlyProfit)}
-              badge="5月"
-              positive={s.totalMonthlyProfit >= 0}
-            />
-            <SummaryCard
-              title="本年收益"
-              value={profitText(s.totalYearlyProfit)}
-              badge="1-5月"
-              positive={s.totalYearlyProfit >= 0}
-            />
-          </div>
-
-          {/* 总盈亏比率 */}
-          <div className="rounded-2xl bg-white shadow-sm p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-gray-500">累计总收益率</span>
-              <span
-                className={`text-lg font-semibold ${
-                  s.totalYearlyProfit >= 0
-                    ? "text-green-600"
-                    : "text-red-500"
-                }`}
-              >
-                {s.totalYearlyProfit >= 0 ? "+" : ""}
-                {(
-                  (s.totalYearlyProfit / s.totalInvestment) *
-                  100
-                ).toFixed(2)}
-                %
-              </span>
-            </div>
-            <div className="mt-3 w-full bg-gray-100 rounded-full h-2">
-              <div
-                className={`h-2 rounded-full transition-all ${
-                  s.totalYearlyProfit >= 0
-                    ? "bg-green-500"
-                    : "bg-red-500"
-                }`}
-                style={{
-                  width: `${Math.min(
-                    Math.abs(
-                      (s.totalYearlyProfit / s.totalInvestment) * 100
-                    ),
-                    100
-                  )}%`,
-                }}
-              />
-            </div>
-          </div>
-
-          {/* 净值汇总 */}
-          <div className="rounded-2xl bg-white shadow-sm p-4">
-            <div className="text-sm text-gray-500 mb-2">基金净值汇总</div>
-            <div className="space-y-3">
-              {funds.map((fund) => (
-                <div
-                  key={fund.基金代码}
-                  className="flex items-center justify-between"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-gray-900 truncate">
-                      {fund.基金名称}
-                    </div>
-                    <div className="text-xs text-gray-400">
-                      {fund.基金代码} · 持有{fmt(fund.持有份额)}份
-                    </div>
-                  </div>
-                  <div className="text-right ml-3">
-                    <div className="text-sm font-semibold text-gray-900">
-                      {fmt(fund.当前净值)}
+        <>
+          <div ref={printRef}>
+            {/* ──────── 总览卡片 2x3 ──────── */}
+            <div className="px-4 pt-4">
+              <div className="grid grid-cols-2 gap-3">
+                {summaryCards.map((card) => (
+                  <div
+                    key={card.title}
+                    className="rounded-2xl bg-white shadow-sm p-4"
+                  >
+                    <div className="text-xs text-gray-500 mb-1">
+                      {card.title}
+                      {card.badge && !card.hasColor && (
+                        <span className="ml-2 text-[10px] text-gray-400 bg-gray-100 rounded-full px-2 py-0.5">
+                          {card.badge}
+                        </span>
+                      )}
                     </div>
                     <div
-                      className={`text-xs ${profitColorClass(
-                        fund.累计收益率
-                      )}`}
+                      className={`text-lg font-bold ${
+                        card.hasColor
+                          ? profitColor(card.profit!)
+                          : "text-gray-900"
+                      }`}
                     >
-                      {fmtPercent(fund.累计收益率)}
+                      {card.value}
                     </div>
+                    {card.hasColor && card.badge && (
+                      <div
+                        className={`text-[11px] mt-0.5 font-medium ${profitColor(
+                          card.profit!
+                        )}`}
+                      >
+                        {card.badge}
+                      </div>
+                    )}
                   </div>
+                ))}
+              </div>
+            </div>
+
+            {/* ──────── 基金收益明细表 ──────── */}
+            <div className="px-4 pt-4">
+              <div className="rounded-2xl bg-white shadow-sm overflow-hidden">
+                <div className="px-4 py-3 text-sm font-semibold text-gray-900 border-b border-gray-100">
+                  基金收益明细表
                 </div>
-              ))}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs whitespace-nowrap">
+                    <thead>
+                      <tr className="border-b border-gray-100 bg-gray-50">
+                        <th className="sticky left-0 z-10 bg-gray-50 px-3 py-3 font-medium text-gray-500 min-w-[120px]">
+                          基金名称
+                        </th>
+                        <th className="px-3 py-3 font-medium text-gray-500 min-w-[90px]">
+                          购买日期
+                        </th>
+                        <th className="px-3 py-3 font-medium text-gray-500 min-w-[90px]">
+                          购买金额
+                        </th>
+                        <th className="px-3 py-3 font-medium text-gray-500 min-w-[90px]">
+                          当前金额
+                        </th>
+                        <th className="px-3 py-3 font-medium text-gray-500 min-w-[100px]">
+                          本周收益
+                        </th>
+                        <th className="px-3 py-3 font-medium text-gray-500 min-w-[100px]">
+                          本月收益
+                        </th>
+                        <th className="px-3 py-3 font-medium text-gray-500 min-w-[100px]">
+                          本年收益
+                        </th>
+                        <th className="px-3 py-3 font-medium text-gray-500 min-w-[90px]">
+                          总收益
+                        </th>
+                        <th className="px-3 py-3 font-medium text-gray-500 min-w-[80px]">
+                          购买渠道
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {funds.map((fund) => {
+                        const totalFundProfit =
+                          fund["当前市值"] - fund["购买金额"];
+                        const totalFundRate =
+                          fund["购买金额"] > 0
+                            ? totalFundProfit / fund["购买金额"]
+                            : 0;
+                        return (
+                          <tr
+                            key={fund["基金代码"]}
+                            onClick={() => handleRowClick(fund)}
+                            className="border-b border-gray-50 last:border-0 hover:bg-blue-50/40 cursor-pointer transition-colors"
+                          >
+                            <td className="sticky left-0 z-10 bg-white px-3 py-3">
+                              <div className="font-medium text-gray-900 text-sm">
+                                {fund["基金名称"]}
+                              </div>
+                              <div className="text-gray-400 text-[10px] mt-0.5">
+                                {fund["基金代码"]}
+                              </div>
+                            </td>
+                            <td className="px-3 py-3 text-gray-500">
+                              {fund["成立/购买日期"]}
+                            </td>
+                            <td className="px-3 py-3 text-gray-900 font-medium">
+                              ¥{fmtCompact(fund["购买金额"])}
+                            </td>
+                            <td className="px-3 py-3 text-gray-900 font-medium">
+                              ¥{fmtCompact(fund["当前市值"])}
+                            </td>
+                            {/* 本周收益 + 收益率 */}
+                            <td className="px-3 py-3">
+                              <div className={profitColor(fund["本周收益"])}>
+                                {profitText(fund["本周收益"])}
+                              </div>
+                              <div
+                                className={`text-[10px] mt-0.5 ${profitColor(
+                                  fund["本周收益"]
+                                )}`}
+                              >
+                                {fund["购买金额"] > 0
+                                  ? fmtPercent(fund["本周收益"] / fund["购买金额"])
+                                  : "+0.00%"}
+                              </div>
+                            </td>
+                            {/* 本月收益 + 收益率 */}
+                            <td className="px-3 py-3">
+                              <div className={profitColor(fund["本月收益"])}>
+                                {profitText(fund["本月收益"])}
+                              </div>
+                              <div
+                                className={`text-[10px] mt-0.5 ${profitColor(
+                                  fund["本月收益"]
+                                )}`}
+                              >
+                                {fund["购买金额"] > 0
+                                  ? fmtPercent(fund["本月收益"] / fund["购买金额"])
+                                  : "+0.00%"}
+                              </div>
+                            </td>
+                            {/* 本年收益 + 收益率 */}
+                            <td className="px-3 py-3">
+                              <div className={profitColor(fund["本年收益"])}>
+                                {profitText(fund["本年收益"])}
+                              </div>
+                              <div
+                                className={`text-[10px] mt-0.5 ${profitColor(
+                                  fund["本年收益"]
+                                )}`}
+                              >
+                                {fund["购买金额"] > 0
+                                  ? fmtPercent(fund["本年收益"] / fund["购买金额"])
+                                  : "+0.00%"}
+                              </div>
+                            </td>
+                            {/* 总收益 + 收益率 */}
+                            <td className="px-3 py-3">
+                              <div className={profitColor(totalFundProfit)}>
+                                {profitText(totalFundProfit)}
+                              </div>
+                              <div
+                                className={`text-[10px] mt-0.5 ${profitColor(
+                                  totalFundProfit
+                                )}`}
+                              >
+                                {fmtPercent(totalFundRate)}
+                              </div>
+                            </td>
+                            <td className="px-3 py-3 text-gray-500">
+                              {fund["购买渠道"] || "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
+
+          {/* ──────── 底部按钮（不可打印） ──────── */}
+          <div className="px-4 pt-4 flex gap-3 no-print">
+            <button
+              onClick={() => window.print()}
+              className="flex-1 h-10 rounded-xl bg-white border border-gray-200 text-gray-700 text-sm font-medium shadow-sm hover:bg-gray-50 transition-colors"
+            >
+              🖨️ 打印
+            </button>
+            <button
+              onClick={() => handlePrintPdf()}
+              className="flex-1 h-10 rounded-xl bg-blue-500 text-white text-sm font-medium shadow-sm hover:bg-blue-600 transition-colors"
+            >
+              📄 导出 PDF
+            </button>
+          </div>
+
+          {/* ──────── 基金详情弹窗 ──────── */}
+          {showDetailModal && selectedFund && (
+            <FundDetailModal
+              fund={selectedFund}
+              onClose={handleDetailClose}
+              onEdit={handleEditClick}
+            />
+          )}
+
+          {/* ──────── 编辑弹窗 ──────── */}
+          {showEditModal && editingFund && (
+            <FundEditModal
+              fund={editingFund}
+              onClose={handleEditClose}
+              onSave={handleEditSave}
+            />
+          )}
+
+        </>
       )}
 
-      {/* ──────── 基金列表 Tab ──────── */}
+      {/* ──────── 基金明细 Tab ──────── */}
       {activeTab === "list" && (
         <div className="px-4 pt-4">
           <div className="rounded-2xl bg-white shadow-sm overflow-hidden">
+            <div className="px-4 py-3 text-sm font-semibold text-gray-900 border-b border-gray-100">
+              基金明细
+            </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
+              <table className="w-full text-left text-xs whitespace-nowrap">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
-                    <th className="px-3 py-3 font-medium text-gray-500">
-                      名称
+                    <th className="sticky left-0 z-10 bg-gray-50 px-3 py-3 font-medium text-gray-500 min-w-[120px]">
+                      基金名称
                     </th>
-                    <th className="px-3 py-3 font-medium text-gray-500">
-                      净值
+                    <th className="px-3 py-3 font-medium text-gray-500 min-w-[70px]">
+                      代码
                     </th>
-                    <th className="px-3 py-3 font-medium text-gray-500">
-                      份额
+                    <th className="px-3 py-3 font-medium text-gray-500 min-w-[90px]">
+                      购买金额
                     </th>
-                    <th className="px-3 py-3 font-medium text-gray-500">
-                      累计收益
+                    <th className="px-3 py-3 font-medium text-gray-500 min-w-[80px]">
+                      持有份额
                     </th>
-                    <th className="px-3 py-3 font-medium text-gray-500">
-                      本月收益
+                    <th className="px-3 py-3 font-medium text-gray-500 min-w-[70px]">
+                      当前净值
                     </th>
-                    <th className="px-3 py-3 font-medium text-gray-500">
-                      本年收益
+                    <th className="px-3 py-3 font-medium text-gray-500 min-w-[90px]">
+                      当前市值
+                    </th>
+                    <th className="px-3 py-3 font-medium text-gray-500 min-w-[80px]">
+                      累计收益率
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   {funds.map((fund) => (
                     <tr
-                      key={fund.基金代码}
-                      className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50"
+                      key={fund["基金代码"]}
+                      onClick={() => handleRowClick(fund)}
+                      className="border-b border-gray-50 last:border-0 hover:bg-blue-50/40 cursor-pointer transition-colors"
                     >
-                      <td className="px-3 py-3">
-                        <div className="font-medium text-gray-900 whitespace-nowrap">
-                          {fund.基金名称}
+                      <td className="sticky left-0 z-10 bg-white px-3 py-3">
+                        <div className="font-medium text-gray-900 text-sm">
+                          {fund["基金名称"]}
                         </div>
-                        <div className="text-gray-400">{fund.基金代码}</div>
-                      </td>
-                      <td className="px-3 py-3 font-medium text-gray-900">
-                        {fmt(fund.当前净值)}
                       </td>
                       <td className="px-3 py-3 text-gray-500">
-                        {fmt(fund.持有份额)}
+                        {fund["基金代码"]}
                       </td>
-                      <td
-                        className={`px-3 py-3 font-medium ${profitColorClass(
-                          fund.累计收益率
-                        )}`}
-                      >
-                        <div>{fmtPercent(fund.累计收益率)}</div>
-                        <div className="font-normal text-[10px]">
-                          市值 ¥{fmtCurrency(fund.当前市值)}
-                        </div>
+                      <td className="px-3 py-3 text-gray-900 font-medium">
+                        ¥{fmtCompact(fund["购买金额"])}
                       </td>
-                      <td
-                        className={`px-3 py-3 ${profitColorClass(
-                          fund.本月收益
-                        )}`}
-                      >
-                        {profitText(fund.本月收益)}
+                      <td className="px-3 py-3 text-gray-500">
+                        {new Intl.NumberFormat("zh-CN", { minimumFractionDigits: 2 }).format(fund["持有份额"])}
                       </td>
-                      <td
-                        className={`px-3 py-3 ${profitColorClass(
-                          fund.本年收益
-                        )}`}
-                      >
-                        {profitText(fund.本年收益)}
+                      <td className="px-3 py-3 text-gray-900 font-medium">
+                        {fund["当前净值"].toFixed(4)}
+                      </td>
+                      <td className="px-3 py-3 text-gray-900 font-medium">
+                        ¥{fmtCompact(fund["当前市值"])}
+                      </td>
+                      <td className={`px-3 py-3 font-semibold ${profitColor(fund["累计收益率"])}`}>
+                        {fmtPercent(fund["累计收益率"])}
                       </td>
                     </tr>
                   ))}
@@ -352,238 +593,80 @@ export default function PrivateFundDashboard() {
         </div>
       )}
 
+      {/* ──────── 净值录入 Tab ──────── */}
+      {activeTab === "nav-input" && (
+        <Suspense fallback={tabFallback}>
+          <NetValueInput />
+        </Suspense>
+      )}
+
+      {/* ──────── 月度统计 Tab ──────── */}
+      {activeTab === "monthly-stats" && (
+        <Suspense fallback={tabFallback}>
+          <MonthlyStats />
+        </Suspense>
+      )}
+
       {/* ──────── 收益趋势 Tab ──────── */}
       {activeTab === "profit" && (
-        <div className="px-4 pt-4 space-y-4">
-          {/* 总盈亏 */}
-          <div className="rounded-2xl bg-white shadow-sm p-4">
-            <div className="text-sm text-gray-500 mb-1">当前总盈亏</div>
-            <div
-              className={`text-2xl font-bold ${
-                s.totalYearlyProfit >= 0 ? "text-green-600" : "text-red-500"
-              }`}
+        <div className="px-4 pt-4">
+          <div className="rounded-2xl bg-white shadow-sm p-8 text-center">
+            <svg
+              className="w-14 h-14 mx-auto text-gray-300 mb-3"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
             >
-              {s.totalYearlyProfit >= 0 ? "+" : ""}
-              ¥{fmtCurrency(Math.abs(s.totalYearlyProfit))}
-            </div>
-          </div>
-
-          {/* 月度收益柱状图 */}
-          <div className="rounded-2xl bg-white shadow-sm p-4">
-            <div className="text-sm font-medium text-gray-900 mb-4">
-              每月收益明细（2026年）
-            </div>
-            <BarChart funds={funds} />
-          </div>
-
-          {/* 各基金月度收益表格 */}
-          <div className="rounded-2xl bg-white shadow-sm overflow-hidden">
-            <div className="px-4 py-3 text-sm font-medium text-gray-900 border-b border-gray-100">
-              各基金月度收益
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-gray-100 bg-gray-50">
-                    <th className="px-3 py-2.5 font-medium text-gray-500">
-                      基金
-                    </th>
-                    <th className="px-3 py-2.5 font-medium text-gray-500">
-                      1月
-                    </th>
-                    <th className="px-3 py-2.5 font-medium text-gray-500">
-                      2月
-                    </th>
-                    <th className="px-3 py-2.5 font-medium text-gray-500">
-                      3月
-                    </th>
-                    <th className="px-3 py-2.5 font-medium text-gray-500">
-                      4月
-                    </th>
-                    <th className="px-3 py-2.5 font-medium text-gray-500">
-                      5月
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {funds.map((fund) => {
-                    const months = ["1月", "2月", "3月", "4月", "5月"];
-                    // 用 fund.基金名称 从月度数据查
-                    // 暂时用 fund.本年收益 反算 - 需要更好的方式
-                    // 直接从原始数据计算
-                    return (
-                      <tr
-                        key={fund.基金代码}
-                        className="border-b border-gray-50 last:border-0"
-                      >
-                        <td className="px-3 py-2.5 font-medium text-gray-900 whitespace-nowrap">
-                          {fund.基金名称}
-                        </td>
-                        {months.map((m) => {
-                          // We stored the yearly data, but we need per-month
-                          // Use the fund.本月收益 for May, others approximated by proportion
-                          const profit = getMonthProfitForFund(
-                            fund.基金名称,
-                            m
-                          );
-                          return (
-                            <td
-                              key={m}
-                              className={`px-3 py-2.5 ${profitColorClass(
-                                profit
-                              )}`}
-                            >
-                              {profitText(profit)}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"
+              />
+            </svg>
+            <p className="text-sm text-gray-400 mb-1">收益趋势图</p>
+            <p className="text-xs text-gray-300">开发中，敬请期待</p>
           </div>
         </div>
       )}
-    </div>
-  );
-}
 
-// ---------- Sub-components ----------
-
-function SummaryCard({
-  title,
-  value,
-  badge,
-  positive,
-}: {
-  title: string;
-  value: string;
-  badge?: string;
-  positive?: boolean;
-}) {
-  return (
-    <div className="rounded-2xl bg-white shadow-sm p-4">
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-xs text-gray-500">{title}</span>
-        {badge && (
-          <span className="text-[10px] text-gray-400 bg-gray-100 rounded-full px-2 py-0.5">
-            {badge}
-          </span>
-        )}
-      </div>
-      <div
-        className={`text-lg font-bold ${
-          positive === undefined
-            ? "text-gray-900"
-            : positive
-            ? "text-green-600"
-            : "text-red-500"
-        }`}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
-
-/** 收益柱状图 */
-function BarChart({ funds }: { funds: FundData[] }) {
-  const months = ["1月", "2月", "3月", "4月", "5月"];
-
-  // 计算每月总收益
-  const monthlyTotals = months.map((m) => {
-    let sum = 0;
-    for (const f of funds) {
-      sum += getMonthProfitForFund(f.基金名称, m);
-    }
-    return sum;
-  });
-
-  const maxAbs = Math.max(...monthlyTotals.map(Math.abs), 1);
-
-  return (
-    <div className="space-y-3">
-      {/* Bars */}
-      <div className="flex items-end gap-2 h-40">
-        {monthlyTotals.map((val, i) => {
-          const heightPct = Math.max((Math.abs(val) / maxAbs) * 100, 4);
-          const isPositive = val >= 0;
-          return (
-            <div key={i} className="flex-1 flex flex-col items-center h-full justify-end">
-              <div className="text-[10px] font-medium text-gray-500 mb-1">
-                {val >= 0 ? "+" : ""}
-                {fmtCurrency(val)}
-              </div>
-              <div
-                className={`w-full rounded-t ${
-                  isPositive ? "bg-green-400" : "bg-red-400"
-                }`}
-                style={{ height: `${heightPct}%`, maxHeight: "120px" }}
+      {/* ──────── 配置 Tab ──────── */}
+      {activeTab === "config" && (
+        <div className="px-4 pt-4">
+          <div className="rounded-2xl bg-white shadow-sm p-8 text-center">
+            <svg
+              className="w-14 h-14 mx-auto text-gray-300 mb-3"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z"
               />
-              <div className="text-[10px] text-gray-400 mt-1">
-                {months[i]}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+              />
+            </svg>
+            <p className="text-sm text-gray-400 mb-1">系统配置</p>
+            <p className="text-xs text-gray-300">开发中，敬请期待</p>
+          </div>
+        </div>
+      )}
+
+      <style jsx global>{`
+        @media print {
+          body { background: white !important; }
+          .no-print { display: none !important; }
+        }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      `}</style>
     </div>
   );
-}
-
-// ---------- Data helpers ----------
-
-// Lazy-load the monthly profit data for client-side use
-function getMonthProfitForFund(name: string, month: string): number {
-  // Inline the monthly data to avoid async import complexity
-  const data: Record<string, Record<string, number>> = {
-    "衍盛指数增强1号": {
-      "1月": 3624820.23,
-      "2月": 1934489.55,
-      "3月": -3418224.25,
-      "4月": 3211628.28,
-      "5月": 507099.2,
-    },
-    "幻方量化300指数专享16号11期": {
-      "1月": 198159.29,
-      "2月": 233845.89,
-      "3月": -241557.07,
-      "4月": 446710.22,
-      "5月": 182557.61,
-    },
-    "量锐指数增强1000一号A": {
-      "1月": 455652.77,
-      "2月": 296138.16,
-      "3月": -486254.52,
-      "4月": 496856.7,
-      "5月": 253488.48,
-    },
-    "量锐指增22号三期": {
-      "1月": 126553,
-      "2月": 92617,
-      "3月": -129078,
-      "4月": 141905,
-      "5月": 70296,
-    },
-    "宽德鸿图7号一期": {
-      "1月": 444074.87,
-      "2月": 354268.93,
-      "3月": -612538.41,
-      "4月": 421778.22,
-      "5月": 169082.9,
-    },
-    "明汯股票精选招享3号": {
-      "1月": 459500,
-      "2月": 321500,
-      "3月": -526000,
-      "4月": 499500,
-      "5月": 245000,
-    },
-    "招商财富-丰元联动108号": {
-      "5月": 260527.27,
-    },
-  };
-  return data[name]?.[month] || 0;
 }
