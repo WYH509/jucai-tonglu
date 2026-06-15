@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { updateMaterial, deleteMaterial } from "@/lib/cloudbase";
+import { updateMaterial, deleteMaterial, isCloudBaseConfigured } from "@/lib/cloudbase";
 
 /** PUT /api/renovation/materials/:id — 更新主材 */
 export async function PUT(
@@ -7,6 +7,12 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    if (!isCloudBaseConfigured()) {
+      return NextResponse.json(
+        { error: "CloudBase 未配置，无法写入" },
+        { status: 503 }
+      );
+    }
     const { id } = await params;
     const body = await request.json();
     await updateMaterial(id, body);
@@ -23,6 +29,12 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    if (!isCloudBaseConfigured()) {
+      return NextResponse.json(
+        { error: "CloudBase 未配置，无法写入" },
+        { status: 503 }
+      );
+    }
     const { id } = await params;
     await deleteMaterial(id);
     return NextResponse.json({ ok: true });

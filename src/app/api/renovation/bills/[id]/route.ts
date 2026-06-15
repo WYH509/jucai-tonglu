@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { updateBill, deleteBill } from "@/lib/cloudbase";
+import { updateBill, deleteBill, isCloudBaseConfigured } from "@/lib/cloudbase";
 
 /** PUT /api/renovation/bills/:id — 更新账单 */
 export async function PUT(
@@ -7,6 +7,12 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    if (!isCloudBaseConfigured()) {
+      return NextResponse.json(
+        { error: "CloudBase 未配置，无法写入" },
+        { status: 503 }
+      );
+    }
     const { id } = await params;
     const body = await request.json();
     await updateBill(id, body);
@@ -23,6 +29,12 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    if (!isCloudBaseConfigured()) {
+      return NextResponse.json(
+        { error: "CloudBase 未配置，无法写入" },
+        { status: 503 }
+      );
+    }
     const { id } = await params;
     await deleteBill(id);
     return NextResponse.json({ ok: true });

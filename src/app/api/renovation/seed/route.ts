@@ -1,10 +1,23 @@
 import { NextResponse } from "next/server";
-import { countBills, createBills, createMaterials } from "@/lib/cloudbase";
+import { countBills, createBills, createMaterials, isCloudBaseConfigured } from "@/lib/cloudbase";
 import { seedBills, seedMaterials } from "@/data/renovationSeed";
 
 /** POST /api/renovation/seed — 注入种子数据（仅当 bills 为空时） */
 export async function POST() {
   try {
+    if (!isCloudBaseConfigured()) {
+      // CloudBase 未配置时返回种子数据预览
+      return NextResponse.json({
+        ok: true,
+        fallback: true,
+        message: "CloudBase 未配置，仅返回演示数据预览",
+        seeded: {
+          bills: seedBills.length,
+          materials: seedMaterials.length,
+        },
+      });
+    }
+
     const existing = await countBills();
     if (existing > 0) {
       return NextResponse.json(

@@ -167,8 +167,16 @@ export interface FundDashboardData {
 let app: ReturnType<typeof cloudbase.init> | null = null;
 
 /**
+ * 检查 CloudBase 是否已配置环境变量
+ */
+export function isCloudBaseConfigured(): boolean {
+  return !!(process.env.CLOUDBASE_ENV_ID || process.env.NEXT_PUBLIC_CLOUDBASE_ENV_ID);
+}
+
+/**
  * 获取 CloudBase 应用实例（惰性初始化）
  * 在 Next.js 边缘运行时 / Node.js 环境中使用密钥认证。
+ * 如果环境变量未配置，返回 null。
  */
 export function getCloudBaseApp() {
   if (app) return app;
@@ -176,9 +184,7 @@ export function getCloudBaseApp() {
   const envId = process.env.CLOUDBASE_ENV_ID || process.env.NEXT_PUBLIC_CLOUDBASE_ENV_ID;
 
   if (!envId) {
-    throw new Error(
-      "[CloudBase] 缺少环境变量 CLOUDBASE_ENV_ID，请在 .env.local 中配置"
-    );
+    return null;
   }
 
   app = cloudbase.init({
@@ -189,13 +195,26 @@ export function getCloudBaseApp() {
   return app;
 }
 
+/**
+ * 获取 CloudBase 应用实例（严格模式，环境变量缺失时报错）
+ */
+export function getCloudBaseAppStrict() {
+  const instance = getCloudBaseApp();
+  if (!instance) {
+    throw new Error(
+      "[CloudBase] 缺少环境变量 CLOUDBASE_ENV_ID，请在 .env.local 中配置"
+    );
+  }
+  return instance;
+}
+
 // ========== 数据库实例 ==========
 
 /**
  * 获取 CloudBase 数据库实例
  */
 export function getDB() {
-  const app = getCloudBaseApp();
+  const app = getCloudBaseAppStrict();
   return app.database();
 }
 

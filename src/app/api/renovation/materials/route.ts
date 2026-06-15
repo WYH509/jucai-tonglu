@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { queryAllMaterials, createMaterial } from "@/lib/cloudbase";
+import { queryAllMaterials, createMaterial, isCloudBaseConfigured } from "@/lib/cloudbase";
+import { seedMaterials } from "@/data/renovationSeed";
 
 export const dynamic = "force-dynamic";
 
@@ -7,9 +8,13 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     const materials = await queryAllMaterials();
-    return NextResponse.json({ materials });
+    return NextResponse.json({ materials, fallback: false });
   } catch (err: any) {
     console.error("[API] GET /api/renovation/materials error:", err);
+    // CloudBase 未配置时返回种子数据作为演示
+    if (!isCloudBaseConfigured()) {
+      return NextResponse.json({ materials: seedMaterials, fallback: true });
+    }
     return NextResponse.json({ error: err.message || "查询失败" }, { status: 500 });
   }
 }
@@ -17,6 +22,12 @@ export async function GET() {
 /** POST /api/renovation/materials — 创建主材 */
 export async function POST(request: NextRequest) {
   try {
+    if (!isCloudBaseConfigured()) {
+      return NextResponse.json(
+        { error: "CloudBase 未配置，无法写入" },
+        { status: 503 }
+      );
+    }
     const body = await request.json();
     const id = await createMaterial(body);
     return NextResponse.json({ id }, { status: 201 });
